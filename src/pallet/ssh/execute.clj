@@ -8,15 +8,17 @@
    [pallet.action-plan :refer [context-label]]
    [pallet.common.filesystem :as filesystem]
    [pallet.common.logging.logutils :as logutils]
-   [pallet.core.user :refer [obfuscated-passwords]]
+   [pallet.core.session :refer [effective-user]]
+   [pallet.core.user :refer [effective-username obfuscated-passwords]]
    [pallet.execute :as execute
     :refer [clean-logs log-script-output result-with-error-map]]
    [pallet.local.execute :as local]
    [pallet.node :as node]
    [pallet.script-builder :as script-builder]
    [pallet.script.lib :as lib]
-   [pallet.script.lib :refer [chown env exit mkdir]]
-   [pallet.stevedore :as stevedore]
+   [pallet.script.lib
+    :refer [chgrp chmod chown env exit mkdir path-group path-owner]]
+   [pallet.stevedore :as stevedore :refer [fragment]]
    [pallet.transport :as transport]
    [pallet.transport.local]
    [pallet.transport.ssh]
@@ -29,7 +31,8 @@
   "Return the user to use for authentication.  This is not necessarily the
   admin user (e.g. when bootstrapping, it is the image user)."
   [session]
-  (logging/debugf "authentication %s" (obfuscated-passwords (:user session)))
+  (logging/debugf "authentication %s"
+                  (into {} (obfuscated-passwords (:user session))))
   {:user (:user session)})
 
 (defn endpoint
@@ -52,7 +55,7 @@
               (println
                (~lib/make-temp-file
                 ~prefix
-                :tmpdir ~(get script-env "TMPDIR")))))
+                :tmpdir ~(or (get script-env "TMPDIR") true)))))
         result (transport/exec connection {:execv [cmd]} {})]
     (logging/tracef "ssh-mktemp script-env %s" script-env)
     (logging/tracef "ssh-mktemp %s %s" cmd result)
@@ -129,9 +132,10 @@
       (with-connection session [connection]
         (let [authentication (transport/authentication connection)
               script (script-builder/build-script options script action)
-              tmpfile (ssh-mktemp connection "pallet" (:script-env action))
               sudo-user (or (:sudo-user action)
-                            (-> authentication :user :sudo-user))]
+                            (-> authentication :user :sudo-user))
+              tmpfile (ssh-mktemp
+                       connection "pallet" (:script-env action))]
 
           (log-multiline :debug (str (:server endpoint) " ==> %s")
                          (str " -----------------------------------------\n"
@@ -147,12 +151,15 @@
            {:mode (if sudo-user 0644 0600)})
           (logging/trace "ssh-script-on-target execute script file")
           (let [clean-f (clean-logs (:user authentication))
+                cmd (script-builder/build-code session action tmpfile)
+                _ (logging/debugf "ssh-script-on-target command %s" cmd)
                 result (transport/exec
                         connection
-                        (script-builder/build-code session action tmpfile)
+                        cmd
                         {:output-f (log-script-output
                                     (:server endpoint) (:user authentication))
-                         :agent-forwarding (:ssh-agent-forwarding action)})
+                         :agent-forwarding (:ssh-agent-forwarding action)
+                         :pty (:ssh-pty action true)})
                 [result session] (execute/parse-shell-result session result)
                 result (update-in result [:out] clean-f)
                 result (result-with-error-map
@@ -172,9 +179,7 @@
                                     (:summary options)))]
             (logging/trace "ssh-script-on-target remove script file")
             (transport/exec
-             connection
-             {:execv [(stevedore/script ("rm" -f ~tmpfile))]}
-             {})
+             connection {:execv [(fragment ("rm" -f ~tmpfile))]} {})
             (logging/trace "ssh-script-on-target done")
             (logging/debugf "%s   <== ----------------------------------------"
                             (:server endpoint))
@@ -189,14 +194,16 @@
    "Transferring file %s from local to %s:%s"
    file (:server (transport/endpoint connection)) remote-name)
   (if-let [dir (.getParent (io/file remote-name))]
-    (let [prefix (or (script-builder/prefix :sudo session nil) "")
+    (let [  ; prefix (or (script-builder/prefix :sudo session nil) "")
+          user (-> session :user :username)
+          _ (logging/debugf
+             "Transfer: ensure dir %s with ownership %s" dir user)
           {:keys [exit] :as rv} (transport/exec
                                  connection
                                  {:in (stevedore/script
-                                       (~prefix (mkdir ~dir :path true))
-                                       (~prefix
-                                        (chown
-                                         ~(-> session :user :username) ~dir))
+                                       (mkdir ~dir :path true)
+                                       ;; (~prefix (mkdir ~dir :path true))
+                                       ;; (~prefix (chown ~user ~dir))
                                        (exit "$?"))}
                                  {})]
       (if (zero? exit)
@@ -206,7 +213,47 @@
                 (str "Failed to create target directory " dir)
                 rv))))
     (transport/send-stream
-     connection (io/input-stream file) remote-name {:mode 0600})))
+     connection (io/input-stream file) remote-name {:mode 0600}))
+  (let [effective-user (effective-username (effective-user session))
+        state-group (-> session :user :state-group)]
+    (cond
+     state-group
+     (do (logging/debugf "Transfer: chgrp/mod %s %s" state-group remote-name)
+         (let [{:keys [exit out] :as rv}
+               (transport/exec
+                connection
+                {:in (stevedore/script
+                      (println "group is " @(path-group ~remote-name))
+                      (println "owner is " @(path-owner ~remote-name))
+                      (chain-and
+                       (when-not (= @(path-group ~remote-name) ~state-group)
+                         (chgrp ~state-group ~remote-name))
+                       (chmod "0666" ~remote-name))
+                      (exit "$?"))}
+                {})]
+           (when-not (zero? exit)
+             (throw (ex-info
+                     (str "Failed to chgrp/mod uploaded file " remote-name
+                          ".  " out)
+                     rv)))))
+
+     (not= effective-user (-> session :user :username))
+     (do (logging/debugf "Transfer: chown %s %s" effective-user remote-name)
+         (let [{:keys [exit out] :as rv}
+               (transport/exec
+                connection
+                {:in (stevedore/script
+                      (println "group is " @(path-group ~remote-name))
+                      (println "owner is " @(path-owner ~remote-name))
+                      (if-not (= @(path-owner ~remote-name) ~effective-user)
+                        (chown ~effective-user ~remote-name))
+                      (exit "$?"))}
+                {})]
+           (when-not (zero? exit)
+             (throw (ex-info
+                     (str "Failed to chown uploaded file " remote-name
+                          ".  " out)
+                     rv))))))))
 
 (defn ssh-from-local
   "Transfer a file from the origin machine to the target via ssh."

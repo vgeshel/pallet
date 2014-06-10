@@ -14,11 +14,13 @@
    [pallet.actions-impl :refer :all]
    [pallet.argument :as argument :refer [delayed delayed-argument?]]
    [pallet.contracts :refer [any-value check-spec]]
+   [pallet.core.file-upload :refer :all]
+   [pallet.core.session :refer [session]]
    [pallet.crate :refer [admin-user packager phase-context role->nodes-map
                          target]]
    [pallet.node-value :refer [node-value]]
-   [pallet.script.lib :as lib :refer [set-flag-value]]
-   [pallet.stevedore :as stevedore :refer [with-source-line-comments]]
+   [pallet.script.lib :as lib :refer [set-flag-value user-home]]
+   [pallet.stevedore :as stevedore :refer [fragment with-source-line-comments]]
    [pallet.utils :refer [apply-map log-multiline tmpfile]])
   (:import clojure.lang.Keyword))
 
@@ -49,14 +51,15 @@
    script fails. The script is expressed in stevedore."
   {:pallet/plan-fn true}
   [script-name & script]
-  `(exec-script*
-    (delayed [_#]
-      (checked-script
-       ~(if *script-location-info*
-          `(str ~script-name
-                " (" ~(.getName (io/file *file*)) ":" ~(:line (meta &form)) ")")
-          script-name)
-       ~@script))))
+  (let [file (.getName (io/file *file*))
+        line (:line (meta &form))]
+    `(exec-script*
+      (delayed [_#]
+               (checked-script
+                (str ~script-name
+                     (if *script-location-info*
+                       ~(str " (" file ":" line ")")))
+                ~@script)))))
 
 ;;; # Wrap arbitrary code
 (defmacro as-action
@@ -68,13 +71,19 @@
         [(do ~@body) ~'&session]))))
 
 ;;; # Flow Control
+(defn ^:internal plan-flag-kw
+  "Generator for plan flag keywords"
+  []
+  (keyword (name (gensym "flag"))))
+
 (defmacro plan-when
   "Execute the crate-fns-or-actions, only when condition is true."
   {:indent 1
    :pallet/plan-fn true}
   [condition & crate-fns-or-actions]
   (let [nv (gensym "nv")
-        nv-kw (keyword (name nv))
+        nv-kw (gensym "nv-kw")
+        m (meta &form)
         is-stevedore? (and (sequential? condition)
                            (symbol? (first condition))
                            (#{#'stevedore/script #'stevedore/fragment}
@@ -82,16 +91,21 @@
         is-script? (or (string? condition) is-stevedore?)]
     `(phase-context plan-when {:condition ~(list 'quote condition)}
        (let [~@(when is-script?
-                 [nv `(with-source-line-comments false
-                        (exec-checked-script
-                         (str "Check " ~condition)
-                         (~(list `unquote 'pallet.script.lib/set-flag-value)
-                          ~(name nv-kw)
-                          @(do
-                             ~@(if is-stevedore?
-                                 (rest condition)
-                                 ["test" condition])
-                             (~'println @~'?)))))] )]
+                 [nv-kw `(plan-flag-kw)
+                  nv `(with-source-line-comments false
+                        ~(with-meta
+                           `(exec-checked-script
+                             (str "Check " ~condition)
+                             (~(list `unquote
+                                     'pallet.script.lib/set-flag-value)
+                              ~(list `unquote nv-kw)
+                              @(do
+                                 (~@(if is-stevedore?
+                                      (rest condition)
+                                      ["test" condition])
+                                  ">/dev/null 2>&1")
+                                 (~'println @~'?))))
+                           m))])]
          (if-action ~(if is-script?
                        `(delayed [s#]
                                  (= (-> (node-value ~nv s#) :flag-values ~nv-kw)
@@ -107,7 +121,8 @@
    :pallet/plan-fn true}
   [condition & crate-fns-or-actions]
   (let [nv (gensym "nv")
-        nv-kw (keyword (name nv))
+        nv-kw (gensym "nv-kw")
+        m (meta &form)
         is-stevedore? (and (sequential? condition)
                            (symbol? (first condition))
                            (#{#'stevedore/script #'stevedore/fragment}
@@ -115,20 +130,24 @@
         is-script? (or (string? condition) is-stevedore?)]
     `(phase-context plan-when-not {:condition ~(list 'quote condition)}
        (let [~@(when is-script?
-                 [nv `(with-source-line-comments false
-                        (exec-checked-script
-                         (str "Check not " ~condition)
-                         (~(list `unquote `set-flag-value)
-                          ~(name nv-kw)
-                          @(do
-                             ~@(if is-stevedore?
-                                 (rest condition)
-                                 ["test" condition])
-                             (~'println @~'?)))))])]
+                 [nv-kw `(plan-flag-kw)
+                  nv `(with-source-line-comments false
+                        ~(with-meta
+                           `(exec-checked-script
+                             (str "Check not " ~condition)
+                             (~(list `unquote `set-flag-value)
+                              ~(list `unquote nv-kw)
+                              @(do
+                                 (~@(if is-stevedore?
+                                      (rest condition)
+                                      ["test" condition])
+                                  ">/dev/null 2>&1")
+                                 (~'println @~'?))))
+                           m))])]
          (if-action ~(if is-script?
                        `(delayed [s#]
-                          (= (-> (node-value ~nv s#) :flag-values ~nv-kw)
-                             "0"))
+                                 (= (-> (node-value ~nv s#) :flag-values ~nv-kw)
+                                    "0"))
                        `(delayed [~'&session] ~condition))))
        (enter-scope)
        (leave-scope)
@@ -197,7 +216,8 @@ value is itself an action return value."
      - :owner     user name or id for owner of symlink
      - :group     user name or id for group of symlink
      - :mode      symlink permissions
-     - :force     when deleting, try and force removal"
+     - :force     when deleting, try and force removal
+     - :no-deref  do not deref target if it is a symlink to a directory"
   [from name & {:keys [action owner group mode force]
                 :or {action :create force true}}])
 
@@ -306,16 +326,55 @@ value is itself an action return value."
    (optional-path [:group]) String
    (optional-path [:mode]) [:or String Number]
    (optional-path [:force]) any-value
-   (optional-path [:verify]) any-value])
+   (optional-path [:link]) String
+   (optional-path [:verify]) any-value
+   (optional-path [::upload-path]) String])
 
 (defmacro check-remote-file-arguments
   [m]
   (check-spec m `remote-file-arguments &form))
 
+(def-map-schema remote-directory-arguments
+  :strict
+  (constraints
+   (fn [m] (some (set content-options) (keys m))))
+  [(optional-path [:local-file]) String
+   (optional-path [:remote-file]) String
+   (optional-path [:url]) String
+   (optional-path [:md5]) String
+   (optional-path [:md5-url]) String
+   (optional-path [:action]) Keyword
+   (optional-path [:blob]) (map-schema :strict
+                                       [[:container] String [:path] String])
+   (optional-path [:blobstore]) any-value  ; cheating to avoid adding a reqiure
+   (optional-path [:overwrite-changes]) any-value
+   (optional-path [:owner]) String
+   (optional-path [:group]) String
+   (optional-path [:recursive]) any-value
+   (optional-path [:unpack]) any-value
+   (optional-path [:extract-files]) (sequence-of String)
+   (optional-path [:mode]) [:or String Number]
+   (optional-path [:tar-options]) String
+   (optional-path [:unzip-options]) String
+   (optional-path [:strip-components]) Number
+   (optional-path [:install-new-files]) any-value])
+
+(defmacro check-remote-directory-arguments
+  [m]
+  (check-spec m `remote-directory-arguments &form))
+
+(defn setup-node
+  "Action to setup the node.  Use this if file transfers fail due to
+  e.g state-root not existing."
+  []
+  (with-action-options {:script-env-fwd [:TMP :TMPDIR :TEMP]
+                        :script-env {:XX (stevedore/fragment @TEMPDIR)}}
+    (setup-node-action [(:username (admin-user))])))
+
 (defaction transfer-file
   "Function to transfer a local file to a remote path.
 Prefer remote-file or remote-directory over direct use of this action."
-  [local-path remote-path remote-md5-path])
+  [local-path remote-path])
 
 (defaction transfer-file-to-local
   "Function to transfer a remote file to a local path."
@@ -469,22 +528,17 @@ Content can also be copied from a blobstore.
         script-dir (:script-dir action-options)
         user (if (= :sudo (:script-prefix action-options :sudo))
                (:sudo-user action-options)
-               (:username (admin-user)))
-        new-path (new-filename script-dir path)
-        md5-path (md5-filename script-dir path)]
+               (:username (admin-user)))]
     (when local-file
-      (transfer-file local-file new-path md5-path))
+      (transfer-file local-file path))
     ;; we run as root so we don't get permission issues
-    (with-action-options (merge
-                          {:script-prefix :sudo :sudo-user nil}
-                          local-file-options)
-      (remote-file-action
-       path
-       (merge
-        {:install-new-files *install-new-files* ; capture bound values
-         :overwrite-changes *force-overwrite*
-         :owner user}
-        options)))))
+    (remote-file-action
+     path
+     (merge
+      {:install-new-files *install-new-files* ; capture bound values
+       :overwrite-changes *force-overwrite*
+       :owner user}
+      options))))
 
 (defn with-remote-file
   "Function to call f with a local copy of the sessioned remote path.
@@ -593,19 +647,19 @@ only specified files or directories, use the :extract-files option.
                 strip-components 1
                 recursive true}
            :as options}]
+  (check-remote-directory-arguments options)
   (verify-local-file-exists local-file)
   (let [action-options (get-action-options)
         script-dir (:script-dir action-options)
         user (if (= :sudo (:script-prefix action-options :sudo))
                (:sudo-user action-options)
-               (:username (admin-user)))
-        new-path (new-filename script-dir path)
-        md5-path (md5-filename script-dir path)]
+               (:username (admin-user)))]
     (when local-file
-      (transfer-file local-file new-path md5-path))
+      (transfer-file local-file path))
     ;; we run as root so we don't get permission issues
     (with-action-options (merge
-                          {:script-prefix :sudo :sudo-user nil}
+                          {:script-prefix :sudo
+                           :sudo-user (:sudo-user (admin-user))}
                           local-file-options)
       (remote-directory-action
        path
@@ -633,6 +687,7 @@ only specified files or directories, use the :extract-files option.
     - :disable [repo|(seq repo)]  disable specific repository
     - :priority n                 priority (0-100, default 50)
     - :disable-service-start      disable service startup (default false)
+    - :allow-unsigned             install package even if unsigned
 
    Package management occurs in one shot, so that the package manager can
    maintain a consistent view."
@@ -747,11 +802,20 @@ Specify `:line` as a string, or `:package`, `:question`, `:type` and
   {:always-before #{package-manager package-source package}}
   [])
 
+(defmulti repository
+  "Install the specified repository as a package source.
+The :id key must contain a recognised repository."
+  (fn [{:keys [id]}]
+    id))
 
 ;;; # Synch local file to remote
 (defaction rsync
   "Use rsync to copy files from local-path to remote-path"
   [local-path remote-path {:keys [port]}])
+
+(defaction rsync-to-local
+  "Use rsync to copy files from remote-path to local-path"
+  [remote-path local-path {:keys [port]}])
 
 (defn rsync-directory
   "Rsync from a local directory to a remote directory."
@@ -764,6 +828,13 @@ Specify `:line` as a string, or `:package`, `:question`, `:type` and
     ;; (package "rsync")
     (directory to :owner owner :group group :mode mode)
     (rsync from to options)))
+
+(defn rsync-to-local-directory
+  "Rsync from a local directory to a remote directory."
+  {:pallet/plan-fn true}
+  [from to & {:keys [owner group mode port] :as options}]
+  (phase-context rsync-directory-fn {:name :rsync-directory}
+    (rsync-to-local from to options)))
 
 ;;; # Users and Groups
 (defaction group
@@ -865,7 +936,7 @@ Deprecated in favour of pallet.crate.service/service."
      pallet.actions/remote-file
      (service-script-path service-impl service-name)
      :owner "root" :group "root" :mode "0755"
-     (merge {:action action} options))))
+     (merge {:action action} (dissoc options :service-impl)))))
 
 ;;; # Retry
 ;;; TODO: convert to use a nested scope in the action-plan
@@ -941,4 +1012,5 @@ Deprecated in favour of pallet.crate.service/service."
 ;; mode: clojure
 ;; eval: (define-clojure-indent (plan-when 1)(plan-when-not 1))
 ;; eval: (define-clojure-indent (with-action-values 1)(with-service-restart 1))
+;; eval: (define-clojure-indent (on-one-node 1))
 ;; End:

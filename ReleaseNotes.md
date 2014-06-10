@@ -1,4 +1,465 @@
+## 0.8.0-RC.9
+
+- Update to lein-pallet-release 0.1.3
+
+- Update to ssh-transport 0.5.1
+
+- Enable lein-pallet-release
+
+- Print session when error in pallet up, summary if success.
+
+- Fix remote-directory with a url and md5
+  Remote-directory with a url and md5 was failing due to the filename of the 
+  intermediate directory not matching the original download filename.
+
+- Make the :user config optional for nohup crate
+  When using the nohup service crate, the :user option is now optional.
+
+  Fixes #310
+
+- Fix: After eval'ing :action-options into the wrong env map key
+
+- Fix test for debian-backports
+
+- Fix debian backports.
+
+- Fix service-script
+  * Removing invalid argument :service-impl when calling remote-file
+
 Unstable development branch
+
+# 0.8.0-RC.8
+
+- Add ContentFiles, remove user-file-path
+  Decomplects the path used for interim content in remote-file, from the
+  file-uploader.
+
+- Add setup-node action
+  The setup-node action is used to setup the state-root directory
+  (/var/lib/pallet by default).  It must be run with sufficient privileges
+  to create the state-root directory.  You need to include this action if
+  working :no-sudo, in order for the node state to function correctly.
+
+- Respect *script-location-info* at runtime
+  In exec-check-script, evaluate *script-location-info* at runtime rather
+  than compile time.
+
+- Fix effective username for :script-prefix :no-sudo
+
+- Fix live-test
+
+- Allow override of node os-family and os-version
+
+- Fix silent failures of chown in state-root
+  Failures in chown when reflecting the permissions of the file system tree
+  into state-root were not being reported.
+
+- Update to stevedore 0.8.0-beta.6
+  Fixes the `group` implementation
+
+# 0.8.0-RC.7
+
+- Don't slurp files to calculate md5
+  Avoids out of memory errors on transferring large files from localhost.
+
+  Fixes #309
+
+- Allows for using crate-install by passing settings
+  Factors out install-from multi-method from the previous install
+  multi-method, which is preserved for compatibility.
+
+- Improve error handling in defmulti-plan
+
+- Improve propogation of cause in throw-phase-errors
+
+- Add argument checking for remote-directory
+
+- Fix action :sudo-user with a :no-sudo admin user
+  When using :no-sudo in the admin user, ensure that an explicit
+  :sudo-user action option is honoured.
+
+  Fixes #300
+
+- Add :no-deref option to symbolic-link
+
+- Refactor state-root script into functions
+
+- Only mirror permissions to state-root if needed
+  When mirroring permissions, only adjust the permissions if they do not
+  already match.  This is to prevent chmod, chown and chgrp errors.
+
+- Fix aptitude commands for long package names
+  Use "disable-columns" option when running aptitude search to find packages
+  with long names.
+
+  Use aptitude --disable-columns when verifying packages are installed.
+
+- Fix os detection for CentOS
+
+- Add targets-in-group
+  Returns a sequence of target-maps for all targets with the specified group
+  name.
+
+- Rename nodes-with-role to targets-with-role
+  targets-with-role returns a sequence of target maps and nodes-with-role
+  returns a sequence of nodes.
+
+
+# 0.8.0-RC.6
+
+- Fix target path for remote-dir local-file uploads
+
+- Add user-upload-path to file-upload protocol
+  Fixes the path at which non local-file remote-file sources are staged.
+
+- Fix effective-username for sudo to root
+
+# 0.8.0-RC.5
+
+- Use effective user in rsync
+
+- Use effective username for sftp upload path
+
+- Add no-op file-checksum and file-backup implementations
+
+- Add rsync file uploader
+
+- Fix creation of state root and upload dirs
+
+- Allow action-options in environment
+  Also splits state-root implementation into state-root-checksum and
+  state-root-backup.
+
+- Add node-state protocols
+
+- Set the file-uploader from action-options
+
+- Add file upload protocol
+
+- Update to clj-ssh 0.5.7
+
+- Normalise action sudo options
+  Ensure :no-sudo is false if the action-options specify a :sudo-user.
+
+  Addresses #300
+
+- Add data to no total ordering exception
+
+- Add precondition for username as string
+
+- Add rsync-to-local action
+  Adds rsync-to-local and rsync-to-local-directory actions to rsync files
+  from a target node to the local filesystem.
+
+- Add a default :status phase to service-phases
+
+- Make md5 files non-writeable by others
+
+- Fix sudo user in rsync
+  Ensure the sudo user from the admin-user or action-options is used when
+  executing rsync.
+
+- Add :state-group option to admin user
+  When uploading files from localhost, state-group will be used to share
+  ownership of uploaded files between the admin user and the sudo user.
+
+  A chgrp will be done, if the upload files do not have the state-group
+  group ownership.
+
+- User specific upload path for local files
+
+- Allow configuration of pallet state directory
+
+- Change path-user and path-group to return names
+
+- Correctly wire partition function in `partition-targets`.
+  `:partition-f` parameter passed to `pallet.api/lift` was not took into
+  account in the partitioning logic.
+
+- Update node-list test for new state tag format.
+
+- Have remote-file and remote-directory honor :sudo-user. Fixes #295
+
+- Properly tag node-list nodes as bootstrapped. Fixes #294
+
+- Log repository in :package-source install strategy
+
+- Update test-spec for :partition-f testing
+
+- Fix use of :consider-nodes in lift
+
+# 0.8.0-RC.4
+
+## Features
+
+- Add :provider in node-spec
+  Allow provider specific options under the :provider key in a node-map. The
+  value should be a map where each key is a provider keyword, and the value
+  is a map of provider specific options.
+
+- Add :repository to :package-source crate-install
+  Allow adding well known repositories as a package source.
+
+- Add repository multimethod
+  The multimethod provides an abstraction for adding a repository to a
+  package manager.
+
+## Fixes
+
+- Replaced readlink with canonical-path in remote-directory
+
+- Add :consider-groups option to lift and converge
+  Replaces all-nodes, that was not ported from 0.7.
+
+- Allow image-user to return no credentials
+  When creating nodes, some providers can create nodes that are authorised
+  with the admin user credentials.  If no credential is returned by
+  image-user, merge the credentials from the admin user.
+
+- Fix create-path-with-template with missing dir
+  When creating a file with a missing parent directory,
+  create-path-with-template was hanging.
+
+- Normalise group setting in etc-default
+
+- Add cause to phase-error exception
+
+- Allow passing of ssh-pty option
+
+- Fix if-flag for initd service implementation
+
+- Ignore alphas in version numnbers
+  When building a version vector, ignore alpha characters in components.
+  Ignores version components that contain only alpha characters.
+
+- Add count-by and count-values to pallet.utils
+
+- Fix error checking in execute-and-flag
+
+- Add a :type to excpetion on schema fail
+
+- Add language to temp file extension for scripts
+  Some interpreters require a specific extension.
+
+- Allow scripts to set interpreter arguments
+  When using the exec action, passing a sequence to :interpreter-args will
+  result in these flags being used with the interpreter to invoke the
+  script.
+
+- Make update of /etc/hosts optional in set-hostname
+  If DNS is set up, we may not want to configure /etc/hosts on hostname
+  changes.
+
+- Fix error detection in flag-and-execute
+
+- Add execute-and-flag-metadata to pallet.api
+  Produces a map that when applied to a phase will ensure the phase is
+  executed only once.
+
+
+# 0.8.0-RC.3
+
+## Features
+
+- Add p.crate/target-flag-value for querying flags
+  Provides a simple function for query values set with the set-flag-value
+  script function.
+
+## Fixes
+
+- Fix help task invocation on no credentials
+
+- Add :link to schema for remote-file
+
+- Make localhost script logging self consistent
+  The logging was using a mix of "localhost" and "(L)".
+
+# 0.8.0-RC.2
+
+## Features
+
+- Add an alias script function
+  Allows setting shell aliases cleanly.
+
+- Add export and source script functions
+
+- Add pallet.core phase-error-exceptions
+  Returns a sequence of the exceptions raised while running phases.
+
+- Add with-centos-script-template for testing
+
+- Added network protocol option to wait-for-port-listen.
+  The wait-for-port-listen fn uses netstat to detect if a service is
+  listening on a specific TCP port. This patch adds additional support for
+  the :udp, :udplite and :raw protocol families.
+
+- Add :disable-service-start to package action
+  Allows the installation of packages withot the automatic startup of the
+  services they provide.
+
+- Add :extract-files option to 'remote-directory
+  Allows the specification of which files or directories to extract from a
+  jar, zip or tar archive.
+
+- Allow control of hashing in scripts
+  The :script-hash option can be used to control whether the shell hashes
+  executable paths.  Defaults to true.
+
+- Allow action specific script context
+  The :script-context action option can be used to specify a sequence of
+  additional script context keywords for an action.
+
+- Allow tmpdir specification in make-temp-file
+
+- Add spool-root to p.script.lib
+  Returns the root directory for spool files, usually /var/spool.
+
+- Add group-node-maps to return node maps
+  Returns a sequence of node maps for the specified group specs.
+
+- Make init script creation optional
+  Packages often install init scripts.  This makes the writing of an init
+  script optional, allowing pallet's initd service abstraction to be used
+  with package provided init scripts.
+
+- Add :link to content-options
+
+- Update to stevedore 0.8.0-beta.5
+
+- Upgrade to useful 0.10.3
+
+- Update to pallet-repl 0.8.0-beta.2
+
+- Use *exit-process* in pallet.main
+  This is compatible with leiningen's main, which should make it simpler to
+  use pallet with grenchman.
+
+## Fixes
+
+- Refactor plan-when and plan-when-not
+  Refactored so that the flag keyword generation is via a function, which
+  can be redef'd for testing.  Also fixed the line number on the generated
+  script.
+
+- Refactor line number in exec-checked-script
+
+- Factor out node-value-symbol
+
+- Fix shadowing of alias in p.script.lib-test
+
+- Fix scripts for non-root sudo user
+  The permissions for scripts to be run by a non-root sudo user were failing
+  if the admin user's home directory didn't have execute permissions for the
+  user.
+
+  Fixed by writing the scripts to the system temp directory.
+
+- task-utils locates pallet.clj even if no project
+  The pallet.clj file should be used if in the current directory, even if no
+  project map is passed.
+
+- Make rsync action preserve ownership and perms
+  The default options for the rsync task are changed to preserve ownership
+  and file permissions.
+
+- Fix remote-file for missing parent directories
+  A missing parent directory was causing an infinite loop.
+
+- Add emacs variables to pallet.action
+
+- Suppress output in plan-when script tests
+  Tests that generated output where confusing the plan-when detection of the
+  test exit status.
+
+  Fixes #282
+
+- Fix remote-directory with relative path
+  Fixes #280.
+
+- Add file local variables to build-actions
+
+- Add remote-directory live test
+  Test remote-directory with a local zip file. Can be run with:
+
+  lein with-profile +pallet-lein,+vmfest pallet up --roles remote-directory
+
+- Fix the 2-arg arity of is= in script-test
+
+- Fix environment forwarding
+  This was broken when executing script on a local machine.  The
+  :script-env action option takes a map of environment variables to set. The
+  :script-env-fwd action option takes a sequence of environment variables to
+  forward.
+
+- Fix #277. Check for /selinux/enforce before issuing 'chcon'.
+
+- Ignore .DS_Store file in ~/.pallet/services
+  Reading configuration was trying to interpret the file as a pallet
+  configuration map.
+
+  Fixes #276
+
+- Ensure :checkout-deps-shares is overriden in lein 2.3.x
+
+- Add better logging on config file format errors
+
+- fix typo in cluster-spec (:cluster-name instead of :cluster-cluster-name)
+
+- fix cluster-spec to not break when cluster-name is a keyword
+
+- enhance logging in package namespace to resolve lazyseqs
+
+- Add node-spec test for :hardware-model
+
+- Fix some grammatical errors
+  * Thanks for your work on pallet!
+  * Fixed instances of `it's` that should have been `its`
+   * Only use `its` when it can be substituted for `it is`
+
+- Use Classes in clj-schema constraints
+  Using classes rather than functions gives improved validation failure
+  messages.
+
+- Add test for node-spec with :subnet-id
+
+- Add service-name precondition to service function
+
+- Factor out check-spec* function from check-spec
+
+- fix some typos
+
+- Fix os-family in package-test
+
+- add missing :all-node-set in 'lift-options-schema'.
+
+- Ensure ssh-mktemp respects TMPDIR in :script-env
+
+- Log ssh port when executing remote scripts
+
+- Fix ensure-service-dispatch in hybrid provider
+
+- Make p.script.lib/tmp-dir more robust
+  Try $TMPDIR, $TEMP, $TMP, /tmp, /var/tmp and /usr/tmp.
+
+  Fixes #237
+
+- Update to stevedore 0.8.0-beta.3
+
+- fix leiningen spec
+  Was just missing a quote.
+
+- Fix bug in pallet.crate.etc-hosts/hosts
+
+- Fixed error on nohup service start
+  Wrong "file" primitive was used - an action instead of script - in
+  generation of service starting script.
+
+- Update to pallet-fsmop 0.3.1
+
+- Catch Error in p.c.primitives/async-fsm
+
+- Fix package-manager :summary for lazy seqs
+
 
 # 0.8.0-RC.1
 

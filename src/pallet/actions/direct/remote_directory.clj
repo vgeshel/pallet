@@ -3,7 +3,7 @@
    content can come from a downloaded tar or zip file."
   (:require
    [clojure.string :as string]
-   [pallet.action :refer [action-fn implement-action]]
+   [pallet.action :refer [action-fn action-options implement-action]]
    [pallet.action-plan :refer [checked-commands]]
    [pallet.actions :refer [directory]]
    [pallet.actions-impl
@@ -11,13 +11,15 @@
             new-filename
             remote-directory-action
             remote-file-action]]
-   [pallet.actions.direct.remote-file :refer [create-path-with-template]]
-   [pallet.script.lib :as lib :refer [user-default-group]]
+   [pallet.actions.direct.remote-file
+    :refer [default-content-files file-uploader]]
+   [pallet.core.file-upload :refer [upload-file-path]]
+   [pallet.script.lib :as lib :refer [dirname user-default-group]]
+   [pallet.ssh.content-files :refer [content-path]]
    [pallet.stevedore :as stevedore :refer [fragment]]
    [pallet.stevedore :refer [with-source-line-comments]]))
 
 (require 'pallet.actions.direct.directory)
-(require 'pallet.actions.direct.remote-file)
 
 (def ^{:private true}
   directory* (action-fn directory :direct))
@@ -25,24 +27,25 @@
   remote-file* (action-fn remote-file-action :direct))
 
 (defn- source-to-cmd-and-path
-  [session path url local-file remote-file md5 md5-url
-   install-new-files overwrite-changes]
+  [session path
+   {:keys [url local-file remote-file md5 md5-url install-new-files
+           overwrite-changes]}
+   upload-path content-files action-options]
   (cond
-   url (let [tarpath (str
-                      (with-source-line-comments false
-                        (stevedore/script (~lib/tmp-dir))) "/"
-                      (.getName
-                       (java.io.File. (.getFile (java.net.URL. url)))))]
-         [(->
-           (remote-file* session tarpath
-                         {:url url :md5 md5 :md5-url md5-url
-                          :install-new-files install-new-files
-                          :overwrite-changes overwrite-changes})
-           first second)
+   url (let [filename (.getFile (java.net.URL. url))
+             tarpath (content-path content-files session action-options
+                                   (str path filename))]
+         [(stevedore/chain-commands
+           (-> (directory* session (fragment @(dirname ~tarpath))) first second)
+           (-> (remote-file* session tarpath
+                             {:url url :md5 md5 :md5-url md5-url
+                              :install-new-files install-new-files
+                              :overwrite-changes overwrite-changes})
+               first second))
           tarpath])
    local-file [""
-               (new-filename (-> session :action :script-dir) path)
-               (md5-filename (-> session :action :script-dir) path)]
+               upload-path
+               (md5-filename session (-> session :action :script-dir) path)]
    remote-file ["" remote-file (str remote-file ".md5")]))
 
 (implement-action remote-directory-action :direct
@@ -61,8 +64,13 @@
                  :as options}]
   [[{:language :bash}
     (case action
-      :create (let [url (options :url)
+      :create (let [action-options (action-options session)
+                    uploader (file-uploader action-options)
+                    url (options :url)
                     unpack (options :unpack :tar)
+                    upload-path (upload-file-path uploader session path options)
+                    content-files (or (:content-files action-options)
+                                      default-content-files)
                     options (if (and owner (not group))
                               (assoc options
                                 :group (fragment @(user-default-group ~owner)))
@@ -70,10 +78,15 @@
                 (when (and (or url local-file remote-file) unpack)
                   (let [[cmd tarpath tar-md5] (source-to-cmd-and-path
                                                session path
-                                               url local-file remote-file
-                                               md5 md5-url
-                                               install-new-files
-                                               overwrite-changes)
+                                               (select-keys
+                                                options
+                                                [:url :local-file :remote-file
+                                                 :md5 :md5-url
+                                                 :install-new-files
+                                                 :overwrite-changes])
+                                               upload-path
+                                               content-files
+                                               action-options)
                         tar-md5 (str tarpath ".md5")
                         path-md5 (str path "/.pallet.directory.md5")
                         extract-files (string/join \space extract-files)]
@@ -91,7 +104,7 @@
                         ~(condp = unpack
                           :tar (stevedore/checked-script
                                 (format "Untar %s" tarpath)
-                                (var rdf @("readlink" -f ~tarpath))
+                                (var rdf @(lib/canonical-path ~tarpath))
                                 ("cd" ~path)
                                 ("tar"
                                  ~tar-options
@@ -101,13 +114,13 @@
                                 ("cd" -))
                           :unzip (stevedore/checked-script
                                   (format "Unzip %s" tarpath)
-                                  (var rdf @("readlink" -f ~tarpath))
+                                  (var rdf @(lib/canonical-path ~tarpath))
                                   ("cd" ~path)
                                   ("unzip" ~unzip-options @rdf ~extract-files)
                                   ("cd" -))
                           :jar (stevedore/checked-script
                                 (format "Unjar %s" tarpath)
-                                (var rdf @("readlink" -f ~tarpath))
+                                (var rdf @(lib/canonical-path ~tarpath))
                                 ("cd" ~path)
                                 ("jar" ~jar-options @rdf ~extract-files)
                                 ("cd" -)))

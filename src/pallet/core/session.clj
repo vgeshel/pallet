@@ -106,18 +106,18 @@
 (defn os-family
   "OS-Family of the target-node."
   [session]
-  (or (node/os-family (target-node session))
-      (-> session :server :image :os-family)
+  (or (-> session :server :image :os-family)
       (-> (get-settings (:plan-state session) (target-id session) :pallet/os {})
-          :os-family)))
+          :os-family)
+      (node/os-family (target-node session))))
 
 (defn os-version
   "OS-Family of the target-node."
   [session]
-  (or (node/os-version (target-node session))
-      (-> session :server :image :os-version)
+  (or (-> session :server :image :os-version)
       (-> (get-settings (:plan-state session) (target-id session) :pallet/os {})
-          :os-version)))
+          :os-version)
+      (node/os-version (target-node session))))
 
 (defn group-name
   "Group name of the target-node."
@@ -146,17 +146,21 @@
   [session]
   (map :node (:service-state session)))
 
-(defn nodes-in-group
-  "All nodes in the same tag as the target-node, or with the specified
-  group-name."
+(defn targets-in-group
+  "All targets with the specified group-name."
   [session group-name]
   (->>
    (:service-state session)
    (filter
     #(or (= (:group-name %) group-name)
-         (when-let [group-names (:group-names %)] (group-names group-name))))
-   (map :node)))
+         (when-let [group-names (:group-names %)] (group-names group-name))))))
 
+(defn nodes-in-group
+  "All nodes with the specified group-name."
+  [session group-name]
+  (->>
+   (targets-in-group session group-name)
+   (map :node)))
 
 (defn groups-with-role
   "All target groups with the specified role."
@@ -167,14 +171,19 @@
    (map #(dissoc % :node))
    distinct))
 
-(defn nodes-with-role
-  "All target nodes with the specified role."
+(defn targets-with-role
+  "All targets with the specified role."
   [session role]
   (filter
    (fn [node]
      (when-let [roles (:roles node)]
        (roles role)))
    (:service-state session)))
+
+(defn nodes-with-role
+  "All target nodes with the specified role."
+  [session role]
+  (map :node (targets-with-role session role)))
 
 (defn role->nodes-map
   "Returns a map from role to nodes."
@@ -195,8 +204,10 @@
 (defn admin-user
   "User that remote commands are run under."
   [session]
-  {:pre [session (-> session :environment :user)]}
-  ;; Note: this is not (:user session), which is set to the actuall user used
+  {:pre [(map? session)
+         (or (map? (-> session :environment)))
+         (-> session :environment :user)]}
+  ;; Note: this is not (:user session), which is set to the actual user used
   ;; for authentication when executing scripts, and may be different, e.g. when
   ;; bootstrapping.
   (-> session :environment :user))
@@ -207,6 +218,17 @@
   (compute/admin-group
    (node/os-family (target-node session))
    (node/os-version (target-node session))))
+
+(defn effective-user
+  "Return the effective username."
+  [session]
+  {:post [%]}
+  (let [{:keys [script-prefix] :as action-options} (:action session)
+        action-user (select-keys action-options [:sudo-user :no-sudo])
+        action-user (if (= script-prefix :no-sudo)
+                      (assoc action-user :no-sudo true)
+                      action-user)]
+    (merge (:user session) action-user)))
 
 (defn is-64bit?
   "Predicate for a 64 bit target"

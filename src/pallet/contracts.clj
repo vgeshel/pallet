@@ -75,7 +75,8 @@
    (optional-path [:location]) location-spec-schema
    (optional-path [:hardware]) hardware-spec-schema
    (optional-path [:network]) network-spec-schema
-   (optional-path [:qos]) qos-spec-schema])
+   (optional-path [:qos]) qos-spec-schema
+   (optional-path [:provider]) (map-schema :loose [])])
 
 (def-map-schema phases-schema
   [[(wild Keyword)] IFn])
@@ -118,7 +119,9 @@
    (optional-path [:public-key-path]) [:or String nil]
    (optional-path [:private-key]) [:or String bytes? nil]
    (optional-path [:public-key]) [:or String bytes? nil]
-   (optional-path [:passphrase]) [:or String bytes? nil]])
+   (optional-path [:passphrase]) [:or String bytes? nil]
+   (optional-path [:state-root]) [:or String nil]
+   (optional-path [:state-group]) [:or String nil]])
 
 (def-map-schema environment-strict-schema
   [(optional-path [:algorithms]) (map-schema :loose [])
@@ -142,6 +145,7 @@
    (optional-path [:phase]) [:or phase-schema (sequence-of phase-schema)]
    (optional-path [:environment]) (map-schema :loose environment-strict-schema)
    (optional-path [:user]) user-schema
+   (optional-path [:consider-groups]) (sequence-of group-spec-schema)
    (optional-path [:phase-execution-f]) IFn
    (optional-path [:execution-settings-f]) IFn
    (optional-path [:partition-f]) IFn
@@ -174,7 +178,8 @@
         (throw
          (ex-info
           (format (str "Invalid " spec-name ": %s") (join " " errs))
-          {:errors errs
+          {:type :pallet/schema-validation
+           :errors errs
            :m m
            :spec spec
            :spec-name spec-name

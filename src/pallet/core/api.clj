@@ -6,7 +6,7 @@
    [clojure.string :as string]
    [clojure.string :refer [blank?]]
    [clojure.tools.logging :refer [debugf tracef]]
-   [pallet.action :refer [get-action-options]]
+   [pallet.action :refer [action-options-key get-action-options]]
    [pallet.action-plan :refer [execute stop-execution-on-error translate]]
    [pallet.common.logging.logutils :as logutils]
    [pallet.compute :refer [destroy-node destroy-nodes-in-group nodes run-nodes]]
@@ -18,7 +18,9 @@
    [pallet.session.action-plan
     :refer [assoc-action-plan get-session-action-plan]]
    [pallet.session.verify :refer [add-session-verification-key check-session]]
-   [pallet.stevedore :refer [with-source-line-comments]]))
+   [pallet.ssh.file-upload.sftp-upload :refer [sftp-upload]]
+   [pallet.stevedore :refer [with-source-line-comments]]
+   [pallet.utils :refer [maybe-update-in]]))
 
 (let [v (atom nil)]
   (defn version
@@ -57,7 +59,10 @@
                   {:user (:user environment)}
                   target-map
                   {:service-state service-state
-                   :plan-state plan-state
+                   :plan-state (maybe-update-in
+                                plan-state
+                                [action-options-key]
+                                #(merge (:action-options environment) %))
                    :environment environment}))
               (apply plan-fn args)
               (check-session (session) '(plan-fn))
@@ -148,8 +153,19 @@
                 (:user environment))
           user (if (or (:private-key-path user) (:private-key user))
                  (assoc user :temp-key true)
-                 user)]
-      (debugf "Image-user is %s" (obfuscated-passwords user))
+                 user)
+          user (if (some user [:private-key-path :private-key :password])
+                 user
+                 ;; use credentials from the admin user if no
+                 ;; credentials are supplied by the image (but allow
+                 ;; image to specify the username)
+                 (merge
+                  (select-keys (:user environment)
+                               [:private-key :public-key
+                                :public-key-path :private-key-path
+                                :password])
+                  user))]
+      (debugf "Image-user is %s" (pr-str (obfuscated-passwords user)))
       {:user user
        :executor (get-in environment [:algorithms :executor] default-executor)
        :executor-status-fn (get-in environment [:algorithms :execute-status-fn]
@@ -347,10 +363,19 @@
    (mapcat #(map (fn [r] (merge (dissoc % :result) r)) (:result %)))
    seq))
 
+(defn phase-error-exceptions
+  "Return a sequence of exceptions from phase errors for an operation. "
+  [result]
+  (->>  (phase-errors result)
+        (map (comp :cause :error))
+        (filter identity)))
+
 (defn throw-phase-errors
   [result]
   (when-let [e (phase-errors result)]
     (throw
      (ex-info
       (str "Phase errors: " (string/join " " (map (comp :message :error) e)))
-      {:errors e}))))
+      {:errors e}
+      (or (-> (first e) :message :exception)
+          (-> (first (remove nil? (map (comp :cause :error) e)))))))))

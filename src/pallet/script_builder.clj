@@ -42,19 +42,30 @@ infix-operators
        (fragment
         (sudo :user ~sudo-user :no-prompt true))))))
 
+(defn normalise-sudo-options
+  "Ensure that a :sudo-user specified in the action trumps a :no-sudo
+  specified in the admin user."
+  [user action]
+  (let [r (merge user action)]
+    (if (:sudo-user action)
+      (assoc r :no-sudo false)
+      r)))
+
 (defmulti prefix
   "The executable used to prefix the interpreter (eg. sudo, chroot, etc)."
   (fn [kw session action] kw))
 (defmethod prefix :default [_ _ _] nil)
 (defmethod prefix :sudo [_ session action]
   (debugf "prefix sudo %s" (into {} (merge (:user session) action)))
-  (sudo-cmd-for (merge (:user session) action)))
+  (sudo-cmd-for (normalise-sudo-options (:user session) action)))
 
 (defn build-script
   "Builds a script. The script is wrapped in a shell script to set
 up the working directory (and possibly environment variables in the
 future)."
-  [{:keys [language version interpreter] :or {language :bash} :as options}
+  [{:keys [language version interpreter interpreter-args]
+    :or {language :bash}
+    :as options}
    script
    {:keys [script-dir script-trace script-hash]
     :or {script-hash true}
@@ -77,9 +88,9 @@ future)."
      (let [interpreter (or interpreter
                            (pallet.script-builder/interpreter options))]
        (stevedore/script
-        (var t (~make-temp-file "pallet"))
+        (var t (str (~make-temp-file "pallet") "." ~language))
         (~heredoc @t ~script {:literal true})
-        ((str ~interpreter) @t)
+        ((str ~interpreter) ~@interpreter-args @t)
         (var r @?)
         (rm @t)
         (exit @r))))
@@ -88,33 +99,30 @@ future)."
 (defn build-code
   "Builds a code map, describing the command to execute a script."
   [session {:keys [default-script-prefix script-context script-dir script-env
-                   script-prefix sudo-user]
+                   script-env-fwd script-prefix sudo-user]
             :as action}
    & args]
   (debugf
    "%s"
    (select-keys action
-                [:default-script-prefix :script-dir :script-env :script-prefix
-                 :sudo-user :script-context]))
+                [:default-script-prefix :script-dir :script-env :script-env-fwd
+                 :script-prefix :sudo-user :script-context]))
   (debugf
    "prefix kw %s"
    (:script-prefix session (or script-prefix default-script-prefix :sudo)))
   (with-script-context (concat *script-context* script-context)
     (with-source-line-comments false
-      {:execv
-       (->>
-        (concat
-         (when-let [prefix (prefix
-                            (:script-prefix
-                             session
-                             (or script-prefix default-script-prefix :sudo))
-                            session
-                            action)]
-           (debugf "prefix %s" prefix)
-           (string/split prefix #" "))
-         [(fragment (env))]
-         (env-var-pairs (merge {:SSH_AUTH_SOCK (fragment @SSH_AUTH_SOCK)}
-                               (or script-env (:script-env session))))
-         (interpreter {:language :bash})
-         args)
-        (filter identity))})))
+      {:env-cmd (fragment (env))
+       :env (or script-env (:script-env session))
+       :env-fwd (or script-env-fwd (:script-env-fwd session) [:SSH_AUTH_SOCK])
+       :prefix (when-let [prefix (prefix
+                                  (:script-prefix
+                                   session
+                                   (or script-prefix
+                                       default-script-prefix
+                                       :sudo))
+                                  session
+                                  action)]
+                 (debugf "prefix %s" prefix)
+                 (string/split prefix #" "))
+       :execv (concat (interpreter {:language :bash}) args)})))

@@ -15,7 +15,8 @@
 
 (defrecord User
     [username public-key-path private-key-path public-key private-key
-     passphrase password sudo-password no-sudo sudo-user])
+     passphrase password sudo-password no-sudo sudo-user state-root
+     state-group])
 
 (defn user? [user]
   (instance? pallet.core.user.User user))
@@ -52,11 +53,22 @@
 : the user to sudo to
 
 `:no-sudo`
-: flag to not use sudo (e.g. when the user has root privileges)."
+: flag to not use sudo (e.g. when the user has root privileges).
+
+`:state-root`
+: directory on target to use for pallet state files.  Defaults to
+  /var/lib/pallet.
+
+`:state-group`
+: group shared between admin user and sudo-user.  Used when uploading
+  files. Needed only if the sudo user is unprivileged, and the admin
+  user can't chown/chgrp files.  "
+
   [username {:keys [public-key-path private-key-path
                     public-key private-key
                     passphrase
-                    password sudo-password no-sudo sudo-user]
+                    password sudo-password no-sudo sudo-user
+                    state-root state-group]
              :as options}]
   (map->User (assoc options :username username)))
 
@@ -80,3 +92,11 @@
   (-> user
       (maybe-update-in [:password] obfuscate)
       (maybe-update-in [:sudo-password] obfuscate)))
+
+(defn effective-username
+  "Return the effective username for a user.  This is the :sudo-user,
+  unless :no-sudo is set, in which case it is just the :username."
+  [{:keys [no-sudo sudo-user username]}]
+  (if no-sudo
+    username
+    (or sudo-user "root")))

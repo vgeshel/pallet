@@ -1,5 +1,6 @@
 (ns pallet.script.lib
   "Script library for abstracting target host script differences"
+  (:refer-clojure :exclude [alias source])
   (:require
    [clojure.string :as string]
    [pallet.script :as script]
@@ -21,6 +22,18 @@
 (script/defscript exit [value])
 (script/defimpl exit :default [value]
   ("exit" ~value))
+
+(script/defscript export [name value])
+(script/defimpl export :default [name value]
+  ("export" (str ~name "=" ~value)))
+
+(script/defscript source [path])
+(script/defimpl source :default [path]
+  ("source" ~path))
+
+(script/defscript alias [name value])
+(script/defimpl alias :default [name value]
+  ("alias" (str ~name "=" ~value)))
 
 (script/defscript xargs [script])
 (script/defimpl xargs :default
@@ -86,11 +99,11 @@
    ~(stevedore/map-to-arg-string {:f force :p preserve} :assign true)
    ~source ~destination))
 
-(script/defscript ln [source destination & {:keys [force symbolic]}])
+(script/defscript ln [source destination & {:keys [force symbolic no-deref]}])
 (script/defimpl ln :default
-  [source destination & {:keys [force symbolic]}]
+  [source destination & {:keys [force symbolic no-deref]}]
   ("ln"
-   ~(stevedore/map-to-arg-string {:f force :s symbolic})
+   ~(stevedore/map-to-arg-string {:f force :s symbolic :n no-deref})
    ~source ~destination))
 
 (script/defscript backup-option [])
@@ -114,7 +127,7 @@
   [path])
 (script/defimpl path-owner :default
   [path]
-  ("stat" "-c%u" ~path))
+  ("stat" "-c%U" ~path))
 (script/defimpl path-owner [#{:darwin :os-x}] [path]
   ("stat" "-f" "%Su" ~path))
 
@@ -123,7 +136,7 @@
   [path])
 (script/defimpl path-group :default
   [path]
-  ("stat" "-c%g" ~path))
+  ("stat" "-c%G" ~path))
 (script/defimpl path-group [#{:darwin :os-x}] [path]
   ("stat" "-f" "%Sg" ~path))
 
@@ -640,7 +653,7 @@
   ("aptitude" purge -y  ~(stevedore/option-args options) ~package))
 
 (script/defimpl list-installed-packages [#{:aptitude}] [& options]
-  ("aptitude" search (quoted "~i")))
+  ("aptitude" search --disable-columns (quoted "~i")))
 
 ;;; apt
 (script/defimpl update-package-list [#{:apt}] [& {:keys [] :as options}]
@@ -943,7 +956,8 @@
   [path type]
   (if (&& (~has-command? chcon)
           (&& (directory? "/etc/selinux")
-              ("stat" --format "%C" ~path "2>&-")))
+              (&& (file-exists? "/selinux/enforce")
+                  ("stat" --format "%C" ~path "2>&-"))))
     ("chcon" -Rv ~(str "--type=" type) ~path)))
 
 (script/defscript selinux-bool

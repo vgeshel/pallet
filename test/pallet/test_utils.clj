@@ -73,6 +73,11 @@ list, Alan Dipert and MeikelBrandmeyer."
   [] (or (. System getProperty "ssh.username")
          (. System getProperty "user.name")))
 
+(defn test-unprivileged-username
+  "Function to get test username. This is a function to avoid issues with AOT."
+  [] (or (. System getProperty "unprivileged.username")
+         "unpriv-user"))
+
 (def ubuntu-session {:server {:image {:os-family :ubuntu}}})
 (def centos-session {:server {:image {:os-family :centos}}})
 
@@ -80,6 +85,12 @@ list, Alan Dipert and MeikelBrandmeyer."
   [f]
   "A test fixture for selection ubuntu as the script context"
   (script/with-script-context [:ubuntu]
+    (f)))
+
+(defn with-centos-script-template
+  [f]
+  "A test fixture for selection ubuntu as the script context"
+  (script/with-script-context [:centos]
     (f)))
 
 (defn with-bash-script-language
@@ -150,7 +161,7 @@ list, Alan Dipert and MeikelBrandmeyer."
 (defn target-server
   "Build the target server for the session map"
   [& {:as options}]
-  {:server (apply server-spec (apply concat options))})
+  {:server (apply group-spec (apply concat options))})
 
 (defn group
   "Build a group for the session map"
